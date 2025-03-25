@@ -1,0 +1,58 @@
+services:
+  kdc:
+    build:
+      context: .
+    hostname: kdc.example.com
+    ports:
+    - '88'
+    - '749'
+    environment:
+      REALM_NAME: ${REALM_NAME:-EXAMPLE.COM}
+      DOMAIN_NAME: ${DOMAIN_NAME:-example.com}
+      KADMIN_PASS: ${KADMIN_PASS:-admin_password}
+      MASTER_PASS: ${MASTER_PASS:-master_password}
+      PRINCIPALS: ${PRINCIPALS:-user,service/server.example.com}
+    volumes:
+    - keytabs:/keytabs
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "88"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+  client:
+    image: alpine:3.20
+    depends_on:
+      kdc:
+        condition: service_healthy
+    command:
+    - sh
+    - -c
+    - |
+      apk add --no-cache -u krb5
+      cat > /etc/krb5.conf << EOL
+      [libdefaults]
+          default_realm = EXAMPLE.COM
+      [realms]
+          EXAMPLE.COM = {
+              kdc = kdc.example.com
+          }
+      [domain_realm]
+          .example.com = EXAMPLE.COM
+          example.com = EXAMPLE.COM
+      EOL
+      export KRB5CCNAME=$(mktemp)
+      klist -ekt /keytabs/user.keytab
+      kinit -V -kt /keytabs/user.keytab user@EXAMPLE.COM
+      if [ $? -ne 0 ]; then
+        echo "Failed to initialize Kerberos ticket"
+        exit 1
+      fi
+      klist
+      kdestroy
+    volumes:
+    - keytabs:/keytabs
+
+volumes:
+  keytabs:
+    name: kerberos_keytabs
